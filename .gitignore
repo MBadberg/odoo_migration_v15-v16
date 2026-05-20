@@ -1,0 +1,19 @@
+# Odoo cache/log artifacts
+*.log
+*.dump
+*.sql
+*.zip
+*.tar.gz
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.venv/
+venv/
+
+# OS/editor
+.DS_Store
+.idea/
+.vscode/

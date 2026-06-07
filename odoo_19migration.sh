@@ -53,7 +53,7 @@ BACKUP_DIR="${BACKUP_DIR:-/var/backups/odoo18-to-19-$(date +%F_%H%M)}"
 SKIP_BACKUP="${SKIP_BACKUP:-0}"
 
 # Optional: Ziel-Port für Odoo 19
-ODOO19_HTTP_PORT="8072"
+ODOO19_HTTP_PORT="8071"
 
 # Optional: Admin-Master-Passwort für Odoo 19
 ODOO19_ADMIN_PASSWD="CHANGE_ME_STRONG_PASSWORD"

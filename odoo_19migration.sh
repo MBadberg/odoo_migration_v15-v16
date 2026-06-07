@@ -7,11 +7,12 @@
 #  2) PostgreSQL-Verbindung prüfen
 #  3) Backup von DB + Filestore
 #  4) Odoo 19 + OpenUpgrade 19.0 klonen
-#  5) Python venv anlegen
-#  6) DB-Klon "<dbname>_v19" erstellen
-#  7) Odoo19-Konfiguration schreiben
-#  8) OpenUpgrade-Migration ausführen
-#  9) Optional: systemd-Service odoo19 anlegen
+#  5) Lokale OpenUpgrade-Patches anwenden
+#  6) Python venv anlegen
+#  7) DB-Klon "<dbname>_v19" erstellen
+#  8) Odoo19-Konfiguration schreiben
+#  9) OpenUpgrade-Migration ausführen
+# 10) Optional: systemd-Service odoo19 anlegen
 #
 # Hinweise:
 #  - OpenUpgrade für 14.0+ nutzt Odoo-Core + Module openupgrade_framework /
@@ -51,6 +52,7 @@ ODOO19_OPENUPGRADE_REMOTE="https://github.com/OCA/OpenUpgrade.git"
 
 BACKUP_DIR="${BACKUP_DIR:-/var/backups/odoo18-to-19-$(date +%F_%H%M)}"
 SKIP_BACKUP="${SKIP_BACKUP:-0}"
+PATCH_DIR="${PATCH_DIR:-$(pwd)/openupgrade_patches}"
 
 # Optional: Ziel-Port für Odoo 19
 ODOO19_HTTP_PORT="8071"
@@ -121,11 +123,44 @@ check_db_connection() {
   fi
 }
 
+apply_patch_file() {
+  local src="$1" dst="$2"
+
+  if [[ ! -f "${src}" ]]; then
+    warn "Patch-Datei nicht gefunden: ${src}"
+    return 1
+  fi
+  if [[ ! -f "${dst}" ]]; then
+    warn "Zieldatei für Patch nicht gefunden: ${dst}"
+    return 1
+  fi
+
+  cp "${dst}" "${dst}.bak"
+  cp "${src}" "${dst}"
+  chown "${ODOO_USER}:${ODOO_USER}" "${dst}"
+  python3 -m py_compile "${dst}"
+  log "  ✓ Patch eingespielt: ${src} -> ${dst}"
+}
+
+apply_local_openupgrade_patches() {
+  log "Schritt 4/10: Wende lokale OpenUpgrade-Patches an..."
+
+  local applied=0
+
+  apply_patch_file \
+    "${PATCH_DIR}/account_edi_ubl_cii_19.0.1.0_pre-migration.py" \
+    "${ODOO19_OPENUPGRADE}/openupgrade_scripts/scripts/account_edi_ubl_cii/19.0.1.0/pre-migration.py" && applied=1 || true
+
+  if [[ ${applied} -eq 0 ]]; then
+    warn "Keine lokalen OpenUpgrade-Patches angewendet. PATCH_DIR=${PATCH_DIR}"
+  fi
+}
+
 # ──────────────────────────────────────────────────────────────────
 # 1) Voraussetzungen
 # ──────────────────────────────────────────────────────────────────
 step_prereqs() {
-  log "Schritt 1/9: Installiere Voraussetzungen..."
+  log "Schritt 1/10: Installiere Voraussetzungen..."
   apt-get update -y
   apt-get install -y \
     git build-essential wget curl \
@@ -148,12 +183,12 @@ step_prereqs() {
 # ──────────────────────────────────────────────────────────────────
 step_backup() {
   if [[ "${SKIP_BACKUP}" == "1" ]]; then
-    log "Schritt 2/9: Backup übersprungen (SKIP_BACKUP=1), nutze ${BACKUP_DIR}"
+    log "Schritt 2/10: Backup übersprungen (SKIP_BACKUP=1), nutze ${BACKUP_DIR}"
     [[ -f "${BACKUP_DIR}/${ODOO18_DB}.dump" ]] || err "Backup-Datei fehlt: ${BACKUP_DIR}/${ODOO18_DB}.dump"
     return 0
   fi
 
-  log "Schritt 2/9: Erstelle Backup unter ${BACKUP_DIR}..."
+  log "Schritt 2/10: Erstelle Backup unter ${BACKUP_DIR}..."
   mkdir -p "${BACKUP_DIR}"
 
   log "Stoppe Odoo 18 (${ODOO18_SERVICE})..."
@@ -177,7 +212,7 @@ step_backup() {
 # 3) Code klonen
 # ──────────────────────────────────────────────────────────────────
 step_clone() {
-  log "Schritt 3/9: Klone Odoo 19 + OpenUpgrade 19.0..."
+  log "Schritt 3/10: Klone Odoo 19 + OpenUpgrade 19.0..."
   mkdir -p "${ODOO19_BASE}" "${ODOO19_CUSTOM}"
 
   git config --global --add safe.directory "${ODOO19_SRC}" || true
@@ -195,10 +230,10 @@ step_clone() {
 }
 
 # ──────────────────────────────────────────────────────────────────
-# 4) Venv
+# 5) Venv
 # ──────────────────────────────────────────────────────────────────
 step_venv() {
-  log "Schritt 4/9: Erzeuge Python-venv..."
+  log "Schritt 5/10: Erzeuge Python-venv..."
   if [[ ! -d "${ODOO19_VENV}" ]]; then
     python3 -m venv "${ODOO19_VENV}"
   fi
@@ -223,10 +258,10 @@ step_venv() {
 }
 
 # ──────────────────────────────────────────────────────────────────
-# 5) DB klonen
+# 6) DB klonen
 # ──────────────────────────────────────────────────────────────────
 step_clone_db() {
-  log "Schritt 5/9: Klone Datenbank ${ODOO18_DB} -> ${ODOO19_DB}..."
+  log "Schritt 6/10: Klone Datenbank ${ODOO18_DB} -> ${ODOO19_DB}..."
   safe_cwd
 
   if sudo -u postgres psql -lqt | cut -d '|' -f1 | grep -qw "${ODOO19_DB}"; then
@@ -251,10 +286,10 @@ step_clone_db() {
 }
 
 # ──────────────────────────────────────────────────────────────────
-# 6) Config schreiben
+# 7) Config schreiben
 # ──────────────────────────────────────────────────────────────────
 step_config() {
-  log "Schritt 6/9: Schreibe ${ODOO19_CONF}..."
+  log "Schritt 7/10: Schreibe ${ODOO19_CONF}..."
   mkdir -p "$(dirname "${ODOO19_LOG}")"
   touch "${ODOO19_LOG}"
   chown -R "${ODOO_USER}:${ODOO_USER}" "$(dirname "${ODOO19_LOG}")"
@@ -297,10 +332,10 @@ EOF
 }
 
 # ──────────────────────────────────────────────────────────────────
-# 7) Migration
+# 8) Migration
 # ──────────────────────────────────────────────────────────────────
 step_migrate() {
-  log "Schritt 7/9: Starte OpenUpgrade-Migration auf ${ODOO19_DB}..."
+  log "Schritt 8/10: Starte OpenUpgrade-Migration auf ${ODOO19_DB}..."
   log "Output erscheint live im Terminal und in ${ODOO19_LOG}"
   confirm "Migration jetzt starten?"
 
@@ -339,10 +374,10 @@ step_migrate() {
 }
 
 # ──────────────────────────────────────────────────────────────────
-# 8) systemd
+# 9) systemd
 # ──────────────────────────────────────────────────────────────────
 step_systemd() {
-  log "Schritt 8/9: Erzeuge odoo19.service..."
+  log "Schritt 9/10: Erzeuge odoo19.service..."
   cat > /etc/systemd/system/odoo19.service <<EOF
 [Unit]
 Description=Odoo 19
@@ -369,10 +404,10 @@ EOF
 }
 
 # ──────────────────────────────────────────────────────────────────
-# 9) Abschluss
+# 10) Abschluss
 # ──────────────────────────────────────────────────────────────────
 step_finish() {
-  log "Schritt 9/9: Fertig."
+  log "Schritt 10/10: Fertig."
   log "Nächste Schritte:"
   log "  1) Log prüfen: less ${ODOO19_LOG}"
   log "  2) Odoo 19 starten: systemctl start odoo19"
@@ -383,12 +418,14 @@ step_finish() {
 
 main() {
   require_root
+  local original_cwd="$(pwd)"
   safe_cwd
 
   log "=== Odoo 18 -> 19 Migration startet ==="
   log "Quell-DB:   ${ODOO18_DB}"
   log "Ziel-DB:    ${ODOO19_DB}"
   log "Backup-Dir: ${BACKUP_DIR} (SKIP_BACKUP=${SKIP_BACKUP})"
+  log "Patch-Dir:  ${PATCH_DIR}"
 
   if [[ -z "${DB_PASSWORD}" ]]; then
     log "DB-Auth:    peer / Unix-Socket"
@@ -399,9 +436,11 @@ main() {
   confirm "Fortfahren?"
 
   step_prereqs
-  check_db_connection
   step_backup
+  check_db_connection
+  cd "${original_cwd}"
   step_clone
+  apply_local_openupgrade_patches
   step_venv
   step_clone_db
   step_config

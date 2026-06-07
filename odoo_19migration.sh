@@ -153,13 +153,14 @@ _reason_code_map = [
 
 @openupgrade.migrate()
 def migrate(env, version):
-    openupgrade.copy_columns(
-        env.cr,
-        {"account_tax": [("ubl_cii_tax_exemption_reason_code", None, None)]},
-    )
+    if not openupgrade.column_exists(
+        env.cr, "account_tax", "ubl_cii_tax_exemption_reason_code"
+    ):
+        return
+
     openupgrade.map_values(
         env.cr,
-        openupgrade.get_legacy_name("ubl_cii_tax_exemption_reason_code"),
+        "ubl_cii_tax_exemption_reason_code",
         "ubl_cii_tax_exemption_reason_code",
         _reason_code_map,
         table="account_tax",

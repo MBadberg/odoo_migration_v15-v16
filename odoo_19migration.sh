@@ -7,7 +7,7 @@
 #  2) PostgreSQL-Verbindung prüfen
 #  3) Backup von DB + Filestore
 #  4) Odoo 19 + OpenUpgrade 19.0 klonen
-#  5) Lokale OpenUpgrade-Patches anwenden
+#  5) Eingebaute OpenUpgrade-Fixes anwenden
 #  6) Python venv anlegen
 #  7) DB-Klon "<dbname>_v19" erstellen
 #  8) Odoo19-Konfiguration schreiben
@@ -52,7 +52,6 @@ ODOO19_OPENUPGRADE_REMOTE="https://github.com/OCA/OpenUpgrade.git"
 
 BACKUP_DIR="${BACKUP_DIR:-/var/backups/odoo18-to-19-$(date +%F_%H%M)}"
 SKIP_BACKUP="${SKIP_BACKUP:-0}"
-PATCH_DIR="${PATCH_DIR:-$(pwd)/openupgrade_patches}"
 
 # Optional: Ziel-Port für Odoo 19
 ODOO19_HTTP_PORT="8071"
@@ -123,37 +122,53 @@ check_db_connection() {
   fi
 }
 
-apply_patch_file() {
-  local src="$1" dst="$2"
+apply_builtin_openupgrade_fixes() {
+  log "Schritt 4/10: Wende eingebaute OpenUpgrade-Fixes an..."
 
-  if [[ ! -f "${src}" ]]; then
-    warn "Patch-Datei nicht gefunden: ${src}"
-    return 1
-  fi
-  if [[ ! -f "${dst}" ]]; then
-    warn "Zieldatei für Patch nicht gefunden: ${dst}"
-    return 1
-  fi
+  local dst
+  dst="${ODOO19_OPENUPGRADE}/openupgrade_scripts/scripts/account_edi_ubl_cii/19.0.1.0/pre-migration.py"
+
+  [[ -f "${dst}" ]] || err "Zieldatei für eingebauten Fix nicht gefunden: ${dst}"
 
   cp "${dst}" "${dst}.bak"
-  cp "${src}" "${dst}"
+  cat > "${dst}" <<'PYEOF'
+# Copyright 2026 Tecnativa - Eduardo Ezerouali
+# License AGPL-3.0 or later (https://www.gnu.org/licenses/agpl).
+
+from openupgradelib import openupgrade
+
+_reason_code_map = [
+    ("VATEX_EU_AE", "VATEX-EU-AE"),
+    ("VATEX_EU_D", "VATEX-EU-D"),
+    ("VATEX_EU_F", "VATEX-EU-F"),
+    ("VATEX_EU_G", "VATEX-EU-G"),
+    ("VATEX_EU_I", "VATEX-EU-I"),
+    ("VATEX_EU_IC", "VATEX-EU-IC"),
+    ("VATEX_EU_J", "VATEX-EU-J"),
+    ("VATEX_EU_O", "VATEX-EU-O"),
+    ("VATEX_FR-CNWVAT", "VATEX-FR-CNWVAT"),
+    ("VATEX_FR-FRANCHISE", "VATEX-FR-FRANCHISE"),
+]
+
+
+@openupgrade.migrate()
+def migrate(env, version):
+    openupgrade.copy_columns(
+        env.cr,
+        {"account_tax": [("ubl_cii_tax_exemption_reason_code", None, None)]},
+    )
+    openupgrade.map_values(
+        env.cr,
+        openupgrade.get_legacy_name("ubl_cii_tax_exemption_reason_code"),
+        "ubl_cii_tax_exemption_reason_code",
+        _reason_code_map,
+        table="account_tax",
+    )
+PYEOF
+
   chown "${ODOO_USER}:${ODOO_USER}" "${dst}"
   python3 -m py_compile "${dst}"
-  log "  ✓ Patch eingespielt: ${src} -> ${dst}"
-}
-
-apply_local_openupgrade_patches() {
-  log "Schritt 4/10: Wende lokale OpenUpgrade-Patches an..."
-
-  local applied=0
-
-  apply_patch_file \
-    "${PATCH_DIR}/account_edi_ubl_cii_19.0.1.0_pre-migration.py" \
-    "${ODOO19_OPENUPGRADE}/openupgrade_scripts/scripts/account_edi_ubl_cii/19.0.1.0/pre-migration.py" && applied=1 || true
-
-  if [[ ${applied} -eq 0 ]]; then
-    warn "Keine lokalen OpenUpgrade-Patches angewendet. PATCH_DIR=${PATCH_DIR}"
-  fi
+  log "  ✓ Eingebauter Fix angewendet: account_edi_ubl_cii 19.0.1.0 pre-migration"
 }
 
 # ──────────────────────────────────────────────────────────────────
@@ -418,14 +433,12 @@ step_finish() {
 
 main() {
   require_root
-  local original_cwd="$(pwd)"
   safe_cwd
 
   log "=== Odoo 18 -> 19 Migration startet ==="
   log "Quell-DB:   ${ODOO18_DB}"
   log "Ziel-DB:    ${ODOO19_DB}"
   log "Backup-Dir: ${BACKUP_DIR} (SKIP_BACKUP=${SKIP_BACKUP})"
-  log "Patch-Dir:  ${PATCH_DIR}"
 
   if [[ -z "${DB_PASSWORD}" ]]; then
     log "DB-Auth:    peer / Unix-Socket"
@@ -436,11 +449,10 @@ main() {
   confirm "Fortfahren?"
 
   step_prereqs
-  step_backup
   check_db_connection
-  cd "${original_cwd}"
+  step_backup
   step_clone
-  apply_local_openupgrade_patches
+  apply_builtin_openupgrade_fixes
   step_venv
   step_clone_db
   step_config
